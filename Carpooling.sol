@@ -2,14 +2,12 @@
 pragma solidity ^0.8.0;
 
 contract Carpooling {
-    // Struct to represent a person
     struct Human {
         string name;
         uint8 age;
         bool gender;  // 0 for female, 1 for male
     }
 
-    // Struct to represent a ride
     struct Ride {
         uint rideId;
         string origin;
@@ -19,30 +17,21 @@ contract Carpooling {
         uint seats;
     }
 
-    // Mapping to track ride owners
     mapping(uint => address) public rideOwner;
-
-    // Mapping to track which seats are booked for each ride
     mapping(uint => mapping(uint => address)) public rideToRider;
 
-    // Counter for the total number of rides
     uint8 public rideCount = 0;
-
-    // Arrays to store ride and person details
     Ride[] public rides;
-    Human[] public persons;
-
-    // Mapping to store details of a person based on their address
     mapping(address => Human) public addressDetails;
 
-    // Events to log important actions
     event RideCreated(
         uint rideId,
         string origin,
         string destination,
         uint departuretime,
         uint fare,
-        uint seats        
+        uint seats,
+        address owner
     );
 
     event RideBooked(
@@ -51,33 +40,45 @@ contract Carpooling {
         address passenger
     );
 
-    event RideCancelled(uint rideId);
+    event RideCancelled(
+        uint rideId,
+        address owner
+    );
 
-    // Function to create a new user
-    function newUser(string memory _name, uint8 _age, bool _gender) public {
-        persons.push(Human(_name, _age, _gender));
-        addressDetails[msg.sender].name = _name;
-        addressDetails[msg.sender].age = _age;
-        addressDetails[msg.sender].gender = _gender;
+    modifier rideExists(uint rideId) {
+        require(rideId < rides.length, "Ride does not exist");
+        _;
     }
 
-    // Function to create a new ride
-    function createRide(string memory _origin, string memory _destination, uint _departuretime, uint8 _fare, uint8 _seats) public {
+    modifier onlyRideOwner(uint rideId) {
+        require(msg.sender == rideOwner[rideId], "You are not the ride owner");
+        _;
+    }
+
+    modifier seatsAvailable(uint rideId) {
+        require(rides[rideId].seats > 0, "No available seats");
+        _;
+    }
+
+    function newUser(string memory _name, uint8 _age, bool _gender) public {
+        persons.push(Human(_name, _age, _gender));
+        addressDetails[msg.sender] = Human(_name, _age, _gender);
+    }
+
+    function createRide(string memory _origin, string memory _destination, uint _departuretime, uint _fare, uint _seats) public {
         rides.push(Ride(rideCount, _origin, _destination, _departuretime, _fare, _seats));
         rideOwner[rideCount] = msg.sender;
-        emit RideCreated(rideCount, _origin, _destination, _departuretime, _fare, _seats);
+        emit RideCreated(rideCount, _origin, _destination, _departuretime, _fare, _seats, msg.sender);
         rideCount++;
-    }  
+    }
 
-    // Function to book a ride
-    function bookRide(uint rideId) public {
+    function bookRide(uint rideId) public rideExists(rideId) seatsAvailable(rideId) {
         rideToRider[rideId][rides[rideId].seats] = msg.sender;
         rides[rideId].seats -= 1;
         emit RideBooked(rideId, rides[rideId].seats, msg.sender);
     }
 
-    // Function to get details of a specific ride
-    function getRideDetails(uint rideId) external view returns (
+    function getRideDetails(uint rideId) external view rideExists(rideId) returns (
         string memory origin,
         string memory destination,
         uint departuretime,
@@ -85,7 +86,6 @@ contract Carpooling {
         uint seats,
         address owner
     ) {
-        require(rideId < rides.length, "Ride does not exist");
         Ride memory currentRide = rides[rideId];
         return (
             currentRide.origin,
@@ -97,27 +97,26 @@ contract Carpooling {
         );
     }
 
-    // Function to view available rides
     function viewAvailableRides() external view returns (Ride[] memory) {
         return rides;
     }
 
-    // Function to cancel a ride (only the owner can cancel)
-    function cancelRide(uint rideId) external {
-        require(rideId < rides.length, "Ride does not exist");
-        require(msg.sender == rideOwner[rideId], "You are not the ride owner");
+    function cancelRide(uint rideId) external rideExists(rideId) onlyRideOwner(rideId) {
+        emit RideCancelled(rideId, msg.sender);
 
-        emit RideCancelled(rideId);
-
-        // Refund booked seats to passengers
         for (uint i = 0; i < rides[rideId].seats; i++) {
             address passenger = rideToRider[rideId][i];
             if (passenger != address(0)) {
-                // Refund logic: Transfer fare back to the passenger
-                payable(passenger).transfer(rides[rideId].fare);
+                // Withdraw funds using the withdrawal pattern
+                withdrawFunds(passenger, rides[rideId].fare);
             }
         }
-        // Remove the ride from the rides array
         delete rides[rideId];
+    }
+
+    // Withdraw funds using the withdrawal pattern
+    function withdrawFunds(address payable recipient, uint amount) internal {
+        (bool success, ) = recipient.call{value: amount}("");
+        require(success, "Withdrawal failed");
     }
 }
